@@ -218,6 +218,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 					r.image = $image,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -236,6 +237,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 				"image":                 sp.Metadata.Image,
 				"prefix":                sp.Metadata.Prefix,
 				"topic":                 sp.Metadata.Topic,
+				"description":           sp.Metadata.Description,
 				"disableVirtualization": sp.Control.DisableVirtualization,
 				"runDetached":           sp.Control.RunDetached,
 				"removeOnStop":          sp.Control.RemoveOnStop,
@@ -346,6 +348,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 					r.hash = $hash,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -364,6 +367,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 				"hash":                  et.Metadata.Hash,
 				"prefix":                et.Metadata.Prefix,
 				"topic":                 et.Metadata.Topic,
+				"description":           et.Metadata.Description,
 				"disableVirtualization": et.Control.DisableVirtualization,
 				"runDetached":           et.Control.RunDetached,
 				"removeOnStop":          et.Control.RemoveOnStop,
@@ -450,6 +454,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 						r.image = $image,
 						r.prefix = $prefix,
 						r.topic = $topic,
+						r.description = $description,
 						r.disableVirtualization = $disableVirtualization,
 						r.runDetached = $runDetached,
 						r.removeOnStop = $removeOnStop,
@@ -472,6 +477,7 @@ func (r *RegistryRepo) PutChart(ctx context.Context, chart domain.StarChart) (*d
 					"hash":                  ev.Metadata.Hash,
 					"prefix":                ev.Metadata.Prefix,
 					"topic":                 ev.Metadata.Topic,
+					"description":           ev.Metadata.Description,
 					"disableVirtualization": ev.Control.DisableVirtualization,
 					"runDetached":           ev.Control.RunDetached,
 					"removeOnStop":          ev.Control.RemoveOnStop,
@@ -780,7 +786,6 @@ func (r *RegistryRepo) GetChartsLabels(ctx context.Context, schemaVersion, names
 				END AS versionCreatedAt
 
 			ORDER BY versionCreatedAt DESC
-			LIMIT 1
 
 			OPTIONAL MATCH (v)-[:EXTEND*0..]->(base:Version)
 			WITH c, labels, v, collect(DISTINCT base) AS versions
@@ -1550,13 +1555,40 @@ func (r *RegistryRepo) DeleteChart(ctx context.Context, id, name, namespace, mai
 	defer session.Close(ctx)
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		checkExists := `
+			MATCH (u:User {name: $maintainer})-[:HAS_NAMESPACE]->(n:Namespace {name: $namespace})
+			MATCH (n)-[:HAS_CHART]->(c:Chart {id: $chartId})
+			OPTIONAL MATCH (c)-[:HAS_VERSION]->(v:Version {schemaVersion: $schemaVersion})
+			RETURN c IS NOT NULL AS chartExists, v IS NOT NULL AS versionExists
+		`
+
+		res, err := tx.Run(ctx, checkExists, map[string]any{
+			"chartId":       id,
+			"namespace":     namespace,
+			"maintainer":    maintainer,
+			"schemaVersion": schemaVersion,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if !res.Next(ctx) {
+			return nil, fmt.Errorf("chart with id %s not found in namespace %s for maintainer %s", id, namespace, maintainer)
+		}
+
+		record := res.Record()
+		versionExists, _ := record.Get("versionExists")
+		if versionExists == nil || !versionExists.(bool) {
+			return nil, fmt.Errorf("version %s not found for chart %s", schemaVersion, id)
+		}
+
 		checkExtend := `
 			MATCH (c:Chart {id: $chartId})-[:HAS_VERSION]->(root:Version {schemaVersion: $schemaVersion}) 
-			OPTIONAL MATCH (root)<-[:EXTEND*0..]-(v:Version)
+			OPTIONAL MATCH (root)<-[:EXTEND*1..]-(v:Version)
 			RETURN count(v) AS cnt
 		`
 
-		res, err := tx.Run(ctx, checkExtend, map[string]any{
+		res, err = tx.Run(ctx, checkExtend, map[string]any{
 			"chartId":       id,
 			"schemaVersion": schemaVersion,
 		})
@@ -1599,7 +1631,7 @@ func (r *RegistryRepo) DeleteChart(ctx context.Context, id, name, namespace, mai
 			}
 		}
 
-		// 1. Delete Chart
+		// Delete Version relationship
 		queryDeleteVersion := `
 			MATCH (u:User {name: $maintainer})-[:HAS_NAMESPACE]->(n:Namespace {name: $namespace})
 			MATCH (n)-[:HAS_CHART]->(c:Chart {id: $chartId})
@@ -1923,6 +1955,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 					r.image = $image,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -1940,6 +1973,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 				"image":                 sp.Metadata.Image,
 				"prefix":                sp.Metadata.Prefix,
 				"topic":                 sp.Metadata.Topic,
+				"description":           sp.Metadata.Description,
 				"disableVirtualization": sp.Control.DisableVirtualization,
 				"runDetached":           sp.Control.RunDetached,
 				"removeOnStop":          sp.Control.RemoveOnStop,
@@ -2020,6 +2054,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 					r.image = $image,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -2037,6 +2072,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 				"image":                 tr.Metadata.Image,
 				"prefix":                tr.Metadata.Prefix,
 				"topic":                 tr.Metadata.Topic,
+				"description":           tr.Metadata.Description,
 				"disableVirtualization": tr.Control.DisableVirtualization,
 				"runDetached":           tr.Control.RunDetached,
 				"removeOnStop":          tr.Control.RemoveOnStop,
@@ -2113,6 +2149,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 					r.image = $image,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -2130,6 +2167,7 @@ func (r *RegistryRepo) UpdateChart(ctx context.Context, chart domain.StarChart) 
 					"image":                 ev.Metadata.Image,
 					"prefix":                ev.Metadata.Prefix,
 					"topic":                 ev.Metadata.Topic,
+					"description":           ev.Metadata.Description,
 					"disableVirtualization": ev.Control.DisableVirtualization,
 					"runDetached":           ev.Control.RunDetached,
 					"removeOnStop":          ev.Control.RemoveOnStop,
@@ -2715,6 +2753,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 					r.image = $image,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -2733,6 +2772,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 				"image":                 sp.Metadata.Image,
 				"prefix":                sp.Metadata.Prefix,
 				"topic":                 sp.Metadata.Topic,
+				"description":           sp.Metadata.Description,
 				"disableVirtualization": sp.Control.DisableVirtualization,
 				"runDetached":           sp.Control.RunDetached,
 				"removeOnStop":          sp.Control.RemoveOnStop,
@@ -2840,6 +2880,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 					r.hash = $hash,
 					r.prefix = $prefix,
 					r.topic = $topic,
+					r.description = $description,
 					r.disableVirtualization = $disableVirtualization,
 					r.runDetached = $runDetached,
 					r.removeOnStop = $removeOnStop,
@@ -2858,6 +2899,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 				"hash":                  et.Metadata.Hash,
 				"prefix":                et.Metadata.Prefix,
 				"topic":                 et.Metadata.Topic,
+				"description":           et.Metadata.Description,
 				"disableVirtualization": et.Control.DisableVirtualization,
 				"runDetached":           et.Control.RunDetached,
 				"removeOnStop":          et.Control.RemoveOnStop,
@@ -2880,6 +2922,8 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 				queryLink := `
 					MATCH (t:Trigger {id: $triggerId})
 					OPTIONAL MATCH (ds:DataSource {name: $dsName})
+					WITH t, ds
+					WHERE ds IS NOT NULL
 					MERGE (t)-[:HARD_LINK]->(ds)
 				`
 				_, err := tx.Run(ctx, queryLink, map[string]any{
@@ -2895,6 +2939,8 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 				queryLink := `
 					MATCH (t:Trigger {id: $triggerId})
 					OPTIONAL MATCH (ds:DataSource {name: $dsName})
+					WITH t, ds
+					WHERE ds IS NOT NULL
 					MERGE (t)-[:SOFT_LINK]->(ds)
 				`
 				_, err := tx.Run(ctx, queryLink, map[string]any{
@@ -2945,6 +2991,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 						r.image = $image,
 						r.prefix = $prefix,
 						r.topic = $topic,
+						r.description = $description,
 						r.disableVirtualization = $disableVirtualization,
 						r.runDetached = $runDetached,
 						r.removeOnStop = $removeOnStop,
@@ -2967,6 +3014,7 @@ func (r *RegistryRepo) Extend(ctx context.Context, oldVersion string, chart doma
 					"hash":                  ev.Metadata.Hash,
 					"prefix":                ev.Metadata.Prefix,
 					"topic":                 ev.Metadata.Topic,
+					"description":           ev.Metadata.Description,
 					"disableVirtualization": ev.Control.DisableVirtualization,
 					"runDetached":           ev.Control.RunDetached,
 					"removeOnStop":          ev.Control.RemoveOnStop,
